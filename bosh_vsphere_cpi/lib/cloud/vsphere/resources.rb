@@ -10,9 +10,10 @@ module VSphereCloud
     BYTES_IN_MB = 1024 * 1024
 
     # Creates a new resources model.
-    def initialize
-      @client = Config.client
-      @logger = Config.logger
+    def initialize(config)
+      @config = config
+      #@client = config.client
+      #@logger = config.logger
       @last_update = 0
       @lock = Monitor.new
     end
@@ -88,7 +89,7 @@ module VSphereCloud
     # @param [Array<Hash>] persistent requested persistent storage.
     # @return [Array] an array/tuple of Cluster and Datastore if the resources
     #   were placed successfully, otherwise exception.
-    def place(memory, ephemeral, persistent)
+    def place(cloud_properties, memory, ephemeral, persistent)
       populate_resources(persistent)
 
       # calculate locality to prioritizing clusters that contain the most
@@ -96,40 +97,70 @@ module VSphereCloud
       locality = cluster_locality(persistent)
       locality.sort! { |a, b| b[1] <=> a[1] }
 
-      @lock.synchronize do
-        locality.each do |cluster, _|
-          persistent_sizes = persistent_sizes_for_cluster(cluster, persistent)
+      datacenters = cloud_properties.fetch('datacenters', nil)
 
-          scorer = Scorer.new(cluster, memory, ephemeral, persistent_sizes)
-          if scorer.score > 0
-            datastore = cluster.pick_ephemeral(ephemeral)
-            if datastore
-              cluster.allocate(memory)
-              datastore.allocate(ephemeral)
-              return [cluster, datastore]
+      #blow up if datacenters.size > 1
+
+      datacenter = datacenters.first
+      datacenter_name = datacenter.fetch('name', nil)
+
+      if datacenter_name
+        cluster_hashes = datacenter.fetch('clusters', nil)
+      end
+
+      #blow up if preferred_clusters_hash > 1
+
+      cluster_hash = cluster_hashes.first
+      if cluster_hash
+        cluster_name = cluster_hash.fetch('name', nil)
+      end
+
+
+
+
+      #preferred_cluster = Config.clusters.fetch(cluster_name, nil)
+      p @config.vcenter
+
+
+      @lock.synchronize do
+        unless preferred_cluster
+          locality.each do |cluster, _|
+            persistent_sizes = persistent_sizes_for_cluster(cluster, persistent)
+
+            scorer = Scorer.new(cluster, memory, ephemeral, persistent_sizes)
+            if scorer.score > 0
+              datastore = cluster.pick_ephemeral(ephemeral)
+              if datastore
+                cluster.allocate(memory)
+                datastore.allocate(ephemeral)
+                return [cluster, datastore]
+              end
             end
           end
-        end
 
-        unless locality.empty?
-          @logger.debug("Ignoring datastore locality as we could not find " +
+          unless locality.empty?
+            @logger.debug("Ignoring datastore locality as we could not find " +
                             "any resources near disks: #{persistent.inspect}")
-        end
-
-        weighted_clusters = []
-        datacenters.each_value do |datacenter|
-          datacenter.clusters.each_value do |cluster|
-            persistent_sizes = persistent_sizes_for_cluster(cluster, persistent)
-            scorer = Scorer.new(cluster, memory, ephemeral, persistent_sizes)
-            score = scorer.score
-            @logger.debug("Score: #{cluster.name}: #{score}")
-            weighted_clusters << [cluster, score] if score > 0
           end
+
+          weighted_clusters = []
+          datacenters.each_value do |datacenter|
+            datacenter.clusters.each_value do |cluster|
+              persistent_sizes = persistent_sizes_for_cluster(cluster, persistent)
+              scorer = Scorer.new(cluster, memory, ephemeral, persistent_sizes)
+              score = scorer.score
+              @logger.debug("Score: #{cluster.name}: #{score}")
+              weighted_clusters << [cluster, score] if score > 0
+            end
+          end
+
+          raise "No available resources" if weighted_clusters.empty?
+
+          cluster = Util.weighted_random(weighted_clusters)
+        else
+          cluster = preferred_cluster
         end
 
-        raise "No available resources" if weighted_clusters.empty?
-
-        cluster = Util.weighted_random(weighted_clusters)
         datastore = cluster.pick_ephemeral(ephemeral)
 
         if datastore
@@ -148,9 +179,12 @@ module VSphereCloud
     # @return [void]
     def update
       @datacenters = {}
-      Config.vcenter.datacenters.each_value do |config|
+      @config.vcenter_datacenters.each_value do |config|
         @datacenters[config.name] = Datacenter.new(config)
       end
+
+      @datacenters = @config.datacenter_name
+
       @last_update = Time.now.to_i
     end
 
