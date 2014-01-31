@@ -8,7 +8,11 @@ describe VSphereCloud::Resources::Datacenter do
                                  datacenter_name: 'fake-datacenter-name',
                                  datacenter_vm_folder: 'fake-vm-folder',
                                  datacenter_template_folder: 'fake-template-folder',
-                                 datacenter_clusters: { 'cluster1' => cluster_config1, 'cluster2' => cluster_config2 }
+                                 datacenter_clusters: { 'cluster1' => cluster_config1, 'cluster2' => cluster_config2 },
+                                 datacenter_disk_path: 'fake-disk-path',
+                                 datacenter_datastore_pattern: ephemeral_pattern,
+                                 datacenter_persistent_datastore_pattern: persistent_pattern,
+                                 datacenter_allow_mixed_datastores: allow_mixed,
   ) }
   let(:client) { instance_double('VSphereCloud::Client') }
   let(:vm_folder) { instance_double('VSphereCloud::Resources::Folder') }
@@ -20,6 +24,9 @@ describe VSphereCloud::Resources::Datacenter do
   let(:cluster_config2) { instance_double('VSphereCloud::ClusterConfig') }
   let(:resource_cluster1) { instance_double('VSphereCloud::Resources::Cluster', name: 'cluster1') }
   let(:resource_cluster2) { instance_double('VSphereCloud::Resources::Cluster', name: 'cluster2') }
+  let(:ephemeral_pattern) {instance_double('Regexp')}
+  let(:persistent_pattern) {instance_double('Regexp')}
+  let(:allow_mixed) { false }
 
   before do
     allow(client).to receive(:find_by_inventory_path).with('fake-datacenter-name').and_return(datacenter_mob)
@@ -42,9 +49,9 @@ describe VSphereCloud::Resources::Datacenter do
                        ensure_all: true).and_return({ cluster_mob1 => {}, cluster_mob2 => {} })
 
     allow(VSphereCloud::Resources::Cluster).to receive(:new).with(
-                                                 anything, cluster_config1, {}).and_return(resource_cluster1)
+                                                 config, cluster_config1, {}).and_return(resource_cluster1)
     allow(VSphereCloud::Resources::Cluster).to receive(:new).with(
-                                                 anything, cluster_config2, {}).and_return(resource_cluster2)
+                                                 config, cluster_config2, {}).and_return(resource_cluster2)
   end
 
   describe '#mob' do
@@ -62,19 +69,16 @@ describe VSphereCloud::Resources::Datacenter do
     end
   end
 
-  describe '#clusters' do
-  end
-
   describe '#vm_folder' do
+    it "returns a folder object using the datacenter's vm folder" do
+      expect(datacenter.vm_folder).to eq(vm_folder)
+    end
   end
 
   describe '#template_folder' do
-  end
-
-  describe '#mob' do
-  end
-
-  describe '#config' do
+    it "returns a folder object using the datacenter's template folder" do
+      expect(datacenter.template_folder).to eq(template_folder)
+    end
   end
 
   describe '#name' do
@@ -84,6 +88,84 @@ describe VSphereCloud::Resources::Datacenter do
   end
 
   describe '#disk_path' do
+    it ' returns the datastore disk path' do
+      expect(datacenter.disk_path).to eq('fake-disk-path')
+    end
+  end
+
+  describe '#ephemeral_pattern' do
+    it 'returns a Regexp object defined by the configuration' do
+      expect(datacenter.ephemeral_pattern).to eq(ephemeral_pattern)
+    end
+  end
+
+  describe '#persistent_pattern' do
+    it 'returns a Regexp object defined by the configuration' do
+      expect(datacenter.persistent_pattern).to eq(persistent_pattern)
+    end
+  end
+
+  describe '#allow_mixed' do
+    it 'returns the value from the config' do
+      expect(datacenter.allow_mixed).to eq(false)
+    end
+
+    context 'when allow mixed is true' do
+      let(:allow_mixed) { true }
+      it 'returns the value from the config' do
+        expect(datacenter.allow_mixed).to eq(true)
+      end
+    end
+  end
+
+  describe '#inspect' do
+    it 'includes the mob and the name of the datacenter' do
+      expect(datacenter.inspect).to eq("<Datacenter: #{datacenter_mob} / fake-datacenter-name>")
+    end
+  end
+
+  describe '#clusters' do
+    it 'returns a hash mapping from cluster name to a configured cluster object' do
+      clusters = datacenter.clusters
+      expect(clusters.keys).to match_array(['cluster1', 'cluster2'])
+      expect(clusters['cluster1']).to eq(resource_cluster1)
+      expect(clusters['cluster2']).to eq(resource_cluster2)
+    end
+
+    context 'when a cluster mob cannot be found' do
+      it 'raises an exception' do
+        allow(client).to receive(:get_managed_objects).with(
+                           VimSdk::Vim::ClusterComputeResource,
+                           root: datacenter_mob, include_name: true).and_return(
+                           {
+                             'cluster2' => cluster_mob2,
+                           }
+                         )
+
+        allow(client).to receive(:get_properties).with(
+                           [cluster_mob2],
+                           VimSdk::Vim::ClusterComputeResource,
+                           VSphereCloud::Resources::Cluster::PROPERTIES,
+                           ensure_all: true).and_return({ cluster_mob2 => {} })
+
+
+        expect { datacenter.clusters }.to raise_error(/Can't find cluster: cluster1/)
+      end
+
+    end
+
+    context 'when properties for a cluster cannot be found' do
+      it 'raises an exception' do
+        allow(client).to receive(:get_properties).with(
+                           [cluster_mob1, cluster_mob2],
+                           VimSdk::Vim::ClusterComputeResource,
+                           VSphereCloud::Resources::Cluster::PROPERTIES,
+                           ensure_all: true).and_return({ cluster_mob2 => {} })
+
+        expect { datacenter.clusters }.to raise_error(/Can't find properties for cluster: cluster1/)
+      end
+
+    end
   end
 
   #it "should create a datacenter" do

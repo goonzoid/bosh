@@ -278,7 +278,7 @@ module VSphereCloud
 
     describe '#datacenter_datastore_pattern' do
       it 'returns the datacenter datastore pattern ' do
-        expect(config.datacenter_datastore_pattern).to eq(Regexp.new(datastore_pattern))
+        expect(config.datacenter_datastore_pattern).to eq(Regexp.new('fancy-datastore*'))
       end
     end
 
@@ -338,7 +338,12 @@ module VSphereCloud
       end
 
       context 'when the clusters are strings in the config' do
+        let(:client) { instance_double('VSphereCloud::Client') }
+
         before do
+          allow(Client).to receive(:new).and_return(client)
+          allow(client).to receive(:login)
+
           datacenters.first['clusters'] = [
             'fake-cluster-1',
             { 'fake-cluster-2' => { 'resource_pool' => 'fake-resource-pool-2' } }

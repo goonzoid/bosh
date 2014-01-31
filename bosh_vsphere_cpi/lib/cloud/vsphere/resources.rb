@@ -89,15 +89,13 @@ module VSphereCloud
     # @param [Array<Hash>] persistent requested persistent storage.
     # @return [Array] an array/tuple of Cluster and Datastore if the resources
     #   were placed successfully, otherwise exception.
-    def place(cloud_properties, memory, ephemeral, persistent)
+    def place(memory, ephemeral, persistent)
       populate_resources(persistent)
 
       # calculate locality to prioritizing clusters that contain the most
       # persistent data.
       locality = cluster_locality(persistent)
       locality.sort! { |a, b| b[1] <=> a[1] }
-
-      datacenters = cloud_properties.fetch('datacenters', nil)
 
       #blow up if datacenters.size > 1
 
@@ -115,12 +113,7 @@ module VSphereCloud
         cluster_name = cluster_hash.fetch('name', nil)
       end
 
-
-
-
       #preferred_cluster = Config.clusters.fetch(cluster_name, nil)
-      p @config.vcenter
-
 
       @lock.synchronize do
         unless preferred_cluster
@@ -144,14 +137,12 @@ module VSphereCloud
           end
 
           weighted_clusters = []
-          datacenters.each_value do |datacenter|
-            datacenter.clusters.each_value do |cluster|
-              persistent_sizes = persistent_sizes_for_cluster(cluster, persistent)
-              scorer = Scorer.new(cluster, memory, ephemeral, persistent_sizes)
-              score = scorer.score
-              @logger.debug("Score: #{cluster.name}: #{score}")
-              weighted_clusters << [cluster, score] if score > 0
-            end
+          @config.datacenter_clusters.each_value do |cluster|
+            persistent_sizes = persistent_sizes_for_cluster(cluster, persistent)
+            scorer = Scorer.new(@config, cluster, memory, ephemeral, persistent_sizes)
+            score = scorer.score
+            @logger.debug("Score: #{cluster.name}: #{score}")
+            weighted_clusters << [cluster, score] if score > 0
           end
 
           raise "No available resources" if weighted_clusters.empty?
@@ -175,16 +166,14 @@ module VSphereCloud
 
     private
 
+    attr_reader :config
+
     # Updates the resource models from vSphere.
     # @return [void]
     def update
-      @datacenters = {}
-      @config.vcenter_datacenters.each_value do |config|
-        @datacenters[config.name] = Datacenter.new(config)
-      end
-
-      @datacenters = @config.datacenter_name
-
+      #datacenter_config = config.vcenter_datacenter
+      datacenter = Datacenter.new(config)
+      @datacenters ={ datacenter.name => datacenter }
       @last_update = Time.now.to_i
     end
 
@@ -246,7 +235,7 @@ module VSphereCloud
     # @return [Array<Hash>] filtered out disk specs.
     def persistent_sizes_for_cluster(cluster, disks)
       disks.select { |disk| disk[:cluster] != cluster }.
-          collect { |disk| disk[:size] }
+        collect { |disk| disk[:size] }
     end
   end
 end
