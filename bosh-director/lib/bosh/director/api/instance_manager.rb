@@ -1,3 +1,5 @@
+require 'bosh/director/taints_deployments'
+
 module Bosh::Director
   module Api
     class InstanceManager
@@ -54,7 +56,19 @@ module Bosh::Director
         description = "ssh: #{options['command']}:#{options['target']}"
         deployment = DeploymentLookup.new.by_name(options['deployment_name'])
 
+        taint_job_instances(options)
+
         JobQueue.new.enqueue(user, Jobs::Ssh, description, [deployment.id, options])
+      end
+
+      private
+
+      def taint_job_instances(options)
+        deployment_name = options.fetch('deployment_name')
+        target = options.fetch('target')
+        job_name = target.fetch('job')
+        indexes = target.fetch('indexes')
+        TaintsDeployments.new(deployment_name, job_name, indexes).taint!
       end
     end
   end

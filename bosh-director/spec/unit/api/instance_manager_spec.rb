@@ -33,25 +33,49 @@ module Bosh::Director
 
     describe '#ssh' do
       let(:deployment) { double('Deployment', id: 8675309) }
+      let(:tainter) { double('TaintsDeployments', taint!: nil) }
       let(:deployment_lookup) { instance_double('Bosh::Director::Api::DeploymentLookup') }
       let(:options) do
         {
           'deployment_name' => 'DEPLOYMENT_NAME',
           'command' => 'COMMAND',
-          'target' => 'TARGET'
+          'target' => {
+            'job' => 'JOB',
+            'indexes' => [42]
+          }
         }
       end
 
       before do
         Bosh::Director::Api::DeploymentLookup.stub(new: deployment_lookup)
+        Bosh::Director::TaintsDeployments.stub(new: tainter)
         deployment_lookup.stub(by_name: deployment)
       end
 
-      it 'enqueues a resque job' do
-        job_queue.should_receive(:enqueue).with(
-          username, Jobs::Ssh, 'ssh: COMMAND:TARGET', [deployment.id, options]).and_return(task)
+      describe 'job queueing' do
+        it 'enqueues a resque job' do
+          job_queue.should_receive(:enqueue).with(
+            username, Jobs::Ssh, "ssh: COMMAND:#{options['target']}", [deployment.id, options]).and_return(task)
 
-        expect(subject.ssh(username, options)).to eq(task)
+          expect(subject.ssh(username, options)).to eq(task)
+        end
+      end
+
+      describe 'instance tainting' do
+        before do
+          allow(job_queue).to receive(:enqueue)
+        end
+
+        it 'taints the jobs that we are sshing into' do
+          expect(TaintsDeployments).to receive(:new).with(
+            options['deployment_name'],
+            options['target']['job'], 
+            options['target']['indexes']
+          )
+          expect(tainter).to receive(:taint!) 
+
+          subject.ssh(username, options)
+        end
       end
     end
 
